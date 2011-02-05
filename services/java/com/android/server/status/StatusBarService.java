@@ -65,6 +65,7 @@ import android.view.WindowManagerImpl;
 import android.view.animation.Animation;
 import android.view.animation.AnimationUtils;
 import android.widget.ImageView;
+import android.widget.ImageButton;
 import android.widget.LinearLayout;
 import android.widget.RemoteViews;
 import android.widget.ScrollView;
@@ -288,6 +289,19 @@ public class StatusBarService extends IStatusBar.Stub
     private HashMap<String,PowerButton> mUsedPowerButtons = new HashMap<String,PowerButton>();
     private boolean mHideOnPowerButtonChange = false;
 
+    // statusbar music controls
+    private ImageButton mPlayIcon;
+    private ImageButton mPauseIcon;
+    private ImageButton mStopIcon;
+    private ImageButton mRewindIcon;
+    private ImageButton mForwardIcon;
+    private LinearLayout mStatusbarMusicControls;
+    private AudioManager am;
+    private boolean mIsMusicActive;
+
+    private boolean mStatusMusicControls;
+    private boolean mStatusAlwaysMusic;
+
     /**
      * Construct the service, add the status bar view to the window manager
      */
@@ -348,7 +362,6 @@ public class StatusBarService extends IStatusBar.Stub
         mIcons = (LinearLayout)sb.findViewById(R.id.icons);
         mTickerView = sb.findViewById(R.id.ticker);
         
-
         mExpandedDialog = new ExpandedDialog(context);
         mExpandedView = expanded;
         mExpandedContents = expanded.findViewById(R.id.notificationLinearLayout);
@@ -363,6 +376,15 @@ public class StatusBarService extends IStatusBar.Stub
         mPlmnLabel = (TextView)expanded.findViewById(R.id.plmnLabel);
         mScrollView = (ScrollView)expanded.findViewById(R.id.scroll);
         mNotificationLinearLayout = expanded.findViewById(R.id.notificationLinearLayout);
+
+        // music controls
+        mPlayIcon = (ImageButton) expanded.findViewById(R.id.music_control_play);
+        mPauseIcon = (ImageButton) expanded.findViewById(R.id.music_control_pause);
+        mStopIcon = (ImageButton) expanded.findViewById(R.id.music_control_stop);
+        mRewindIcon = (ImageButton) expanded.findViewById(R.id.music_control_previous);
+        mForwardIcon = (ImageButton) expanded.findViewById(R.id.music_control_next);
+        mStatusbarMusicControls = (LinearLayout) expanded.findViewById(R.id.exp_music_control);
+        //Log.i(TAG, "set Views in makeStatusBarView()");
 
         if (custExpBar) {
             mExpandedView.findViewById(R.id.exp_view_lin_layout).
@@ -450,6 +472,19 @@ public class StatusBarService extends IStatusBar.Stub
             mExpandedView.findViewById(R.id.exp_power_stat).
                         setVisibility(View.GONE);
         }
+
+        // music controls
+        mStatusMusicControls = Settings.System.getInt(mContext.getContentResolver(),
+                    Settings.System.STATUSBAR_MUSIC_CONTROLS, 1) == 1;
+        mStatusAlwaysMusic = Settings.System.getInt(mContext.getContentResolver(),
+                    Settings.System.STATUSBAR_ALWAYS_MUSIC_CONTROLS, 1) == 1;
+        if(!mStatusMusicControls) {
+            mStatusbarMusicControls.setVisibility(View.GONE);
+        } else if (mStatusMusicControls && mStatusAlwaysMusic) {
+            mStatusbarMusicControls.setVisibility(View.VISIBLE);
+        }
+        setupMusicControls();
+        //Log.i(TAG, "setupMusicControls(); from systemReady()");
 
         WindowManagerImpl.getDefault().addView(view, lp);
     }
@@ -1919,6 +1954,91 @@ public class StatusBarService extends IStatusBar.Stub
         }
     };
 
+    /** Music Control **/
+   private View.OnClickListener mPlayListener = new View.OnClickListener() {
+        public void onClick(View v) {
+            refreshMusicStatus();
+            mPlayIcon.setVisibility(View.GONE);
+            mPauseIcon.setVisibility(View.VISIBLE);
+            sendMediaButtonEvent(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE);
+        }
+    };
+
+   private View.OnClickListener mPauseListener = new View.OnClickListener() {
+        public void onClick(View v) {
+            refreshMusicStatus();
+            mPauseIcon.setVisibility(View.GONE);
+            mPlayIcon.setVisibility(View.VISIBLE);
+            sendMediaButtonEvent(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE);
+        }
+    };
+
+   private View.OnClickListener mStopListener = new View.OnClickListener() {
+        public void onClick(View v) {
+            refreshMusicStatus();
+            sendMediaButtonEvent(KeyEvent.KEYCODE_MEDIA_STOP);
+            if (!mStatusAlwaysMusic) {
+                mStatusbarMusicControls.setVisibility(View.GONE);
+            }
+            mPauseIcon.setVisibility(View.GONE);
+            mPlayIcon.setVisibility(View.VISIBLE);
+        }
+    };
+
+   private View.OnClickListener mRewindListener = new View.OnClickListener() {
+        public void onClick(View v) {
+            sendMediaButtonEvent(KeyEvent.KEYCODE_MEDIA_PREVIOUS);
+        }
+    };
+
+   private View.OnClickListener mForwardListener = new View.OnClickListener() {
+        public void onClick(View v) {
+            sendMediaButtonEvent(KeyEvent.KEYCODE_MEDIA_NEXT);
+        }
+    };
+
+    private void refreshMusicStatus() {
+        mIsMusicActive = am.isMusicActive();
+        if ((mIsMusicActive || mStatusAlwaysMusic) && (mStatusMusicControls)) {
+            mStatusbarMusicControls.setVisibility(View.VISIBLE);
+            if (mIsMusicActive) {
+                mPauseIcon.setVisibility(View.VISIBLE);
+                mPlayIcon.setVisibility(View.GONE);
+            } else {
+                mPlayIcon.setVisibility(View.VISIBLE);
+                mPauseIcon.setVisibility(View.GONE);
+            }
+        } else if (!mIsMusicActive && mStatusMusicControls) {
+            mPlayIcon.setVisibility(View.VISIBLE);
+            mPauseIcon.setVisibility(View.GONE);
+        }
+    }
+
+    private void sendMediaButtonEvent(int code) {
+        long eventtime = SystemClock.uptimeMillis();
+
+        Intent downIntent = new Intent(Intent.ACTION_MEDIA_BUTTON, null);
+        KeyEvent downEvent = new KeyEvent(eventtime, eventtime, KeyEvent.ACTION_DOWN, code, 0);
+        downIntent.putExtra(Intent.EXTRA_KEY_EVENT, downEvent);
+        mContext.sendOrderedBroadcast(downIntent, null);
+
+        Intent upIntent = new Intent(Intent.ACTION_MEDIA_BUTTON, null);
+        KeyEvent upEvent = new KeyEvent(eventtime, eventtime, KeyEvent.ACTION_UP, code, 0);
+        upIntent.putExtra(Intent.EXTRA_KEY_EVENT, upEvent);
+        mContext.sendOrderedBroadcast(upIntent, null);
+    }
+
+    private void setupMusicControls() {
+        am = (AudioManager) mContext.getSystemService(Context.AUDIO_SERVICE);
+        mIsMusicActive = am.isMusicActive();
+        mPlayIcon.setOnClickListener(mPlayListener);
+        mPauseIcon.setOnClickListener(mPauseListener);
+        mStopIcon.setOnClickListener(mStopListener);
+        mRewindIcon.setOnClickListener(mRewindListener);
+        mForwardIcon.setOnClickListener(mForwardListener);
+        refreshMusicStatus();
+    }
+
     /** Power Widget **/
 
    private View.OnLongClickListener mPowerLongListener = new View.OnLongClickListener() {
@@ -2347,6 +2467,14 @@ public class StatusBarService extends IStatusBar.Stub
             resolver.registerContentObserver(
                     Settings.System.getUriFor(Settings.System.TORCH_STATE),
                          false, this);
+
+            resolver.registerContentObserver(
+                    Settings.System.getUriFor(Settings.System.STATUSBAR_MUSIC_CONTROLS),
+                         false, this);
+
+            resolver.registerContentObserver(
+                    Settings.System.getUriFor(Settings.System.STATUSBAR_ALWAYS_MUSIC_CONTROLS),
+                         false, this);
         }
 
         @Override
@@ -2396,8 +2524,21 @@ public class StatusBarService extends IStatusBar.Stub
                     mExpandedView.findViewById(R.id.exp_power_stat).
                         setVisibility(View.VISIBLE);
                 }
+            } else if (uri.equals(Settings.System.getUriFor(Settings.System.STATUSBAR_MUSIC_CONTROLS)) ||
+                       uri.equals(Settings.System.getUriFor(Settings.System.STATUSBAR_ALWAYS_MUSIC_CONTROLS))) {
+                mStatusMusicControls = Settings.System.getInt(mContext.getContentResolver(),
+                            Settings.System.STATUSBAR_MUSIC_CONTROLS, 1) == 1;
+                mStatusAlwaysMusic = Settings.System.getInt(mContext.getContentResolver(),
+                            Settings.System.STATUSBAR_ALWAYS_MUSIC_CONTROLS, 1) == 1;
+                mIsMusicActive = am.isMusicActive();
+                if(!mStatusMusicControls || (!mStatusAlwaysMusic && !mIsMusicActive)) {
+                    mStatusbarMusicControls.setVisibility(View.GONE);
+                } else if (mStatusMusicControls && mStatusAlwaysMusic) {
+                    mStatusbarMusicControls.setVisibility(View.VISIBLE);
+                }
             }
             updateWidget();
         }
     }
 }
+
